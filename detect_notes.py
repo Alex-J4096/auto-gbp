@@ -121,6 +121,33 @@ def classify_yellow_connections(markers, green, offset=(0, 0)):
         note["hold_connected"] = any(evidence)
 
 
+def classify_green_roles(markers, green, offset=(0, 0), valid=None):
+    """Require complete samples on both sides; an ROI edge is not a tail."""
+    for note in markers:
+        cx = round(note['center_x'] - offset[0])
+        y = note['y'] - offset[1]
+        w, h = note['width'], note['height']
+        half = max(2, round(w * .3))
+        margin, depth = max(2, round(h * .25)), max(3, round(w * .25))
+        evidence = []
+        for start, end in ((y - margin - depth, y - margin),
+                           (y + h + margin, y + h + margin + depth)):
+            left, right = cx - half, cx + half + 1
+            if start < 0 or end > green.shape[0] or left < 0 or right > green.shape[1]:
+                evidence.append(None)
+                continue
+            patch = green[start:end, left:right]
+            if valid is not None and not np.all(valid[start:end, left:right]):
+                evidence.append(None)
+                continue
+            coverage = np.count_nonzero(patch) / patch.size
+            evidence.append(True if coverage >= .3 else False if coverage <= .08 else None)
+        above, below = evidence
+        note['green_role'] = ('unknown' if None in evidence else
+                              'middle' if above and below else
+                              'head' if above else 'tail' if below else 'unknown')
+
+
 def analyze_top_frame(image: np.ndarray, top: float = 34, bottom: float = 200,
                       observation_y: float = 160, judgment_y: float = 738.52,
                       render: bool = True, green_holds: bool = False,
@@ -176,6 +203,7 @@ def analyze_top_frame(image: np.ndarray, top: float = 34, bottom: float = 200,
         groups[name] = markers
     green_support = cv2.bitwise_and(cv2.inRange(hsv, (35, 65, 85), (85, 255, 255)), field)
     classify_yellow_connections(groups["yellow_notes"], green_support, (x1, y1))
+    classify_green_roles(groups['green_nodes'] + groups['yellow_notes'], green_support, (x1, y1), field)
     classify_yellow_connections(groups["flick_notes"], green_support, (x1, y1))
     for canvas in ((features, overlay, filtered) if render else ()):
         cv2.rectangle(canvas, (x1, y1), (x2 - 1, y2 - 1), (100, 100, 100), 1)
@@ -249,6 +277,7 @@ def detect_green(image: np.ndarray, hsv: np.ndarray | None = None) -> tuple[np.n
     bright = cv2.inRange(hsv, (35, 60, 190), (65, 255, 255))
     bright = cv2.bitwise_and(bright, field)
     kept, markers = extract_markers(bright)
+    classify_green_roles(markers, raw, valid=field)
     segments = []
     # Connect neighbouring green nodes only when an actual green strip is
     # present between them. These are candidate associations, not touch events.

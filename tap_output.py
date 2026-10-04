@@ -62,6 +62,12 @@ class CrossingTracker:
                                "green_below": note.get('green_below', False)})
                 used.add(len(tracks) - 1)
                 self.next_id += 1
+                track = tracks[-1]
+            # Consecutive evidence avoids turning one occluded middle node
+            # into a tail. Do not retain an old tail label through uncertainty.
+            role = note.get('green_role', 'unknown')
+            track['role_frames'] = track.get('role_frames', 0) + 1 if track.get('green_role') == role else 1
+            track['green_role'] = role
         self.tracks = tracks
         return events
 
@@ -125,7 +131,7 @@ class FlickTailMixin:
                 associations[track['id']] = identity
                 if state.get('flick_pending_id') != track['id']:
                     state['flick_pending_id'] = track['id']
-                    state['flick_pending_until'] = track['time'] + .25
+                    state['flick_pending_until'] = track['time'] + self.flick_guard
         # Do not attach two simultaneous tails to the same hold.
         for note_id, lane, crossing in events:
             identity = associations.get(note_id)
@@ -145,10 +151,11 @@ class GreenHoldController(FlickTailMixin):
 
     This does not classify hold endpoints semantically or follow lane changes.
     """
-    def __init__(self, spacing=43, gap_ms=60, tail_release_ms=0):
+    def __init__(self, spacing=43, gap_ms=60, tail_release_ms=0, flick_guard_ms=250):
         self.tracker = CrossingTracker(spacing)
         self.gap = gap_ms / 1000
         self.tail_release = tail_release_ms / 1000
+        self.flick_guard = flick_guard_ms / 1000
         self.active = {}
         self.sequence = 0
 
@@ -182,10 +189,11 @@ class SlidingHoldController(FlickTailMixin):
 
     Parallel ambiguous/merged ribbons are not guessed. Position is in lane units.
     """
-    def __init__(self, spacing=43, gap_ms=60, overlap_ms=30, tail_release_ms=0):
+    def __init__(self, spacing=43, gap_ms=60, overlap_ms=30, tail_release_ms=0, flick_guard_ms=250):
         self.tracker = CrossingTracker(spacing)
         self.gap = gap_ms / 1000
         self.overlap = overlap_ms / 1000
+        self.flick_guard = flick_guard_ms / 1000
         self.tail_release = tail_release_ms / 1000
         self.active = {}
         self.sequence = 0
@@ -226,7 +234,11 @@ class SlidingHoldController(FlickTailMixin):
             elif state['gap_start'] is None:
                 state['gap_start'] = now
 
-        for _, lane, crossing in self.tracker.update(nodes, width, height, line_y, now):
+        crossings = self.tracker.update(nodes, width, height, line_y, now)
+        tracks = {track['id']: track for track in self.tracker.tracks}
+        for note_id, lane, crossing in crossings:
+            track = tracks[note_id]
+            is_tail = track.get('green_role') == 'tail' and track.get('role_frames', 0) >= 2
             related = [s for s in self.active.values() if s['lane'] == lane
                        or abs(s['position'] - lane) <= .8]
             if related:
@@ -234,6 +246,11 @@ class SlidingHoldController(FlickTailMixin):
                     state = related[0]
                     state['last_node'] = crossing
                     state['gap_start'] = None
+                    if is_tail:
+                        # A terminal face can project into an adjacent lane on
+                        # long ribbons. Keep existing key ownership; sustained
+                        # ribbon absence still confirms release as before.
+                        continue
                     # Ribbon movement only associates a path. A checkpoint face
                     # crossing the observation line determines the handoff time.
                     if lane in state['keys']:
@@ -254,6 +271,9 @@ class SlidingHoldController(FlickTailMixin):
                                 occupied.discard(held_lane)
                             state['keys'].clear()
                         state['keys'][lane] = state['token']
+                continue
+            if is_tail:
+                # Never start a new hold from an orphaned terminal face.
                 continue
             self.sequence += 1
             token = f'S{self.sequence}:0'
@@ -362,7 +382,7 @@ class NormalTimingOffset:
 class TapScheduler:
     def __init__(self, hwnd, enabled=False, hold_ms=30, key_log=False, input_mode="vk", max_hold_ms=15000,
                  flick_hold_ms=30, timing_jitter=False, jitter_seed=None,
-                 jitter_mean_ms=5, jitter_sigma_ms=21.5):
+                 jitter_mean_ms=5, jitter_sigma_ms=21.5, output_backend=None):
         self.hwnd, self.enabled, self.hold = hwnd, enabled, hold_ms / 1000
         self.key_log = key_log
         self.max_hold = max_hold_ms / 1000
@@ -370,7 +390,7 @@ class TapScheduler:
         self.jitter = NormalTimingOffset(jitter_seed, jitter_mean_ms, jitter_sigma_ms) if timing_jitter else None
         self.hold_offsets = {}
         self.held = {}
-        self.keyboard = Keyboard(input_mode) if enabled else None
+        self.keyboard = (output_backend if output_backend is not None else Keyboard(input_mode)) if enabled else None
         self.condition = threading.Condition()
         self.queue = []
         self.sequence = 0
@@ -560,5 +580,6 @@ class TapScheduler:
         with self.condition:
             self.stopping = True
             self.condition.notify()
-        self.thread.join(timeout=2)
+        # The transport must remain open until all shutdown releases finish.
+        self.thread.join()
         self.log.close()

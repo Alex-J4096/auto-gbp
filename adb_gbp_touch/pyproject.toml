@@ -1,0 +1,9 @@
+[project]
+name = "adb-gbp-touch"
+version = "0.1.0"
+description = "Standalone local Android multi-touch input and macro timelines"
+requires-python = ">=3.11"
+dependencies = []
+
+[tool.uv]
+package = false

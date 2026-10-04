@@ -7,6 +7,7 @@ dependencies = [
     "numpy>=2.0,<3.0",
     "opencv-python>=4.10,<5.0",
     "mss>=10,<11",
+    "textual>=8.2.8",
 ]
 
 [tool.uv]

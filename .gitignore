@@ -14,8 +14,9 @@ htmlcov/
 *.log
 *.tmp
 /cmd.txt
-/test_*.py
 /test_pic/
+/tools/
+/config.toml
 
 # Local configuration and editor files
 .env

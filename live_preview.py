@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+from contextlib import ExitStack
 import ctypes
 from ctypes import wintypes
 import sys
@@ -127,8 +128,17 @@ def capture_top_only(capture, region, process_width, band):
     return frame, captured
 
 
-def parse_args(argv=None):
+def build_parser():
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--output-backend', choices=('keyboard', 'touch'), default='keyboard', help='touch 使用持续触点完成点击、滑条和 flick；send-keys 同时控制真实触摸')
+    parser.add_argument('--touch-flick-duration-ms', type=float, default=60, help='触摸 flick 滑动持续时间，默认 60ms')
+    parser.add_argument('--touch-flick-distance', type=float, default=120, help='触摸 flick 向上距离，900 高基准，默认 120')
+    parser.add_argument('--touch-flick-delay-ms', type=float, default=None, help='触摸 flick 独立延迟；留空跟随 touch-delay-ms')
+    parser.add_argument('--adb-path', default='adb', help='ADB 可执行文件路径')
+    parser.add_argument('--adb-serial', default='127.0.0.1:5555', help='本地模拟器 ADB 地址，请确认实例')
+    parser.add_argument('--touch-server', default='tools/scrcpy-win64-v3.3.3/scrcpy-server', help='scrcpy 3.3.3 Android 服务端，非 exe')
+    parser.add_argument('--touch-size', nargs=2, type=int, default=(1920, 1080), help='当前横屏 Android 分辨率，非窗口尺寸')
+    parser.add_argument('--touch-delay-ms', type=float, default=0, help='触摸后端独立延迟（覆盖 top/bottom 延迟），默认 0 待校准')
     parser.add_argument("--list", action="store_true", help="列出可见窗口及 HWND")
     select = parser.add_mutually_exclusive_group()
     select.add_argument("--title", default="MuMu", help="目标窗口标题子串，默认 MuMu（大小写不敏感）")
@@ -145,7 +155,14 @@ def parse_args(argv=None):
     preview.add_argument("--no-preview", dest="no_preview", action="store_true", help="关闭预览及底部测量（默认，兼容旧命令）")
     parser.set_defaults(no_preview=True)
     parser.add_argument("--no-hotkeys", action="store_true", help="不注册全局 F6～F11 快捷键")
-    parser.add_argument("--region", choices=("top", "full"), default="top", help="默认只识别顶部")
+    parser.add_argument("--region", choices=("top", "bottom", "full"), default="top", help="识别模式：top 顶部 / bottom 底部 / full 全图")
+    parser.add_argument("--lower-band", nargs=2, type=float, default=(480, 700), metavar=("Y1", "Y2"),
+                        help="bottom 模式识别范围，900 高基准；不同于 bottom-band 延迟测量区")
+    parser.add_argument("--lower-observation-y", type=float, default=600, help="bottom 模式观察线，默认 600")
+    parser.add_argument("--bottom-delay-ms", type=float, default=0,
+                        help="bottom 模式独立延迟，默认 0 仅供校准，不沿用顶部 delay-ms")
+    parser.add_argument("--bottom-flick-delay-ms", type=float, default=None,
+                        help="bottom 模式 flick 延迟，留空沿用 bottom-delay-ms")
     parser.add_argument("--top-band", nargs=2, type=float, default=(34, 200), metavar=("Y1", "Y2"))
     parser.add_argument("--observation-y", type=float, default=160, help="顶部虚拟观察线，900 高基准")
     parser.add_argument("--judgment-y", type=float, default=738.52, help="固定底部判定线，900 高基准")
@@ -164,6 +181,8 @@ def parse_args(argv=None):
     parser.add_argument("--flick-hold-ms", type=float, default=30, help="手势宏按键持续时间，默认 30ms")
     parser.add_argument("--flick-tail-release-ms", type=float, default=30,
                         help="长押尾 flick 宏触发后释放长押的间隔，默认 30ms")
+    parser.add_argument("--flick-tail-guard-ms", type=float, default=250,
+                        help="尾 flick 候选保护期，默认 250ms；不是宏触发延迟，范围 [0,2000]")
     parser.add_argument("--timing-jitter", action="store_true", help="启用截断在 [-83,+100]ms 的正态时间偏移")
     parser.add_argument("--jitter-mean-ms", type=float, default=5, help="正态偏移均值 μ，默认 +5ms")
     parser.add_argument("--jitter-sigma-ms", type=float, default=21.5, help="正态偏移标准差 σ，默认 21.5ms；0 为固定偏移")
@@ -186,7 +205,36 @@ def parse_args(argv=None):
                         help="同轨延迟匹配相对人工 delay 的容差，默认 +/-250ms")
     parser.add_argument("--key-x", nargs=7, type=float, default=(243, 434, 619, 800, 983, 1169, 1353),
                         help="底部七个键标记的 x，1600 宽基准")
+    return parser
+
+
+def parse_args(argv=None):
+    parser = build_parser()
     args = parser.parse_args(argv)
+    import math
+    for value in vars(args).values():
+        values = value if isinstance(value, (list, tuple)) else [value]
+        if any(isinstance(item, float) and not math.isfinite(item) for item in values):
+            parser.error("数值参数必须是有限数值")
+    if args.touch_delay_ms < 0 or not all(10 <= value <= 65535 for value in args.touch_size):
+        parser.error('touch-delay-ms 必须非负，touch-size 必须在 10..65535')
+    if not 10 <= args.touch_flick_duration_ms <= 100 or not 1 <= args.touch_flick_distance <= 300:
+        parser.error('touch-flick-duration-ms 需在 10..100，touch-flick-distance 需在 1..300')
+    if args.touch_flick_delay_ms is not None and args.touch_flick_delay_ms < 0:
+        parser.error('touch-flick-delay-ms 必须非负')
+    if args.output_backend == 'touch':
+        host, _, port = args.adb_serial.rpartition(':')
+        if host not in ('localhost', '127.0.0.1') or not port.isdigit() or not 1 <= int(port) <= 65535:
+            parser.error('触摸模式 adb-serial 必须是本地地址及有效端口')
+        if args.test_key:
+            parser.error('触摸模式不支持 test-key，请使用 touch_probe.py')
+    if not 0 <= args.flick_tail_guard_ms <= 2000:
+        parser.error("flick-tail-guard-ms 必须位于 [0,2000] 内")
+    if not (0 <= args.lower_band[0] < args.lower_observation_y < args.lower_band[1] <= 900
+            and args.lower_observation_y < args.judgment_y):
+        parser.error("需满足 0 <= lower-band Y1 < lower-observation-y < Y2 <= 900，观察线须在判定线上方")
+    if args.bottom_delay_ms < 0 or (args.bottom_flick_delay_ms is not None and args.bottom_flick_delay_ms < 0):
+        parser.error("bottom-delay-ms 和 bottom-flick-delay-ms 必须非负")
     if not args.green_holds:
         args.green_slides = False
     if not 0 < args.flick_tail_release_ms <= 200:
@@ -232,8 +280,31 @@ def hold_offset_bounds(action, token):
     return None
 
 
-def main():
-    args, parser = parse_args()
+def runtime_settings(args):
+    """Resolve a copy, preserving separately saved top/bottom calibration."""
+    resolved = argparse.Namespace(**vars(args))
+    if args.region == "bottom":
+        resolved.top_band = args.lower_band
+        resolved.observation_y = args.lower_observation_y
+        resolved.lane_spacing = ((args.key_x[-1] - args.key_x[0]) / 6
+                                 * (5 + .36 * args.lower_observation_y)
+                                 / (5 + .36 * args.judgment_y))
+        resolved.delay_ms = args.bottom_delay_ms
+        resolved.flick_delay_ms = args.bottom_flick_delay_ms
+    if args.output_backend == 'touch':
+        resolved.delay_ms = args.touch_delay_ms
+        resolved.flick_delay_ms = args.touch_flick_delay_ms
+    return resolved
+
+
+def main(argv=None):
+    with ExitStack() as resources:
+        return run_main(argv, resources)
+
+
+def run_main(argv, resources):
+    args, parser = parse_args(argv)
+    args = runtime_settings(args)
     bottom_y = args.judgment_y - args.bottom_offset
     cv2.setNumThreads(args.cv_threads)
     user = windows_api()
@@ -275,25 +346,55 @@ def main():
     mode = ord("1")
     previous = time.perf_counter()
     fps = 0.0
-    tracker = CrossingTracker(args.lane_spacing)
-    flick_tracker = CrossingTracker(args.lane_spacing)
+    def new_tracker():
+        # Lower notes travel farther per frame in reference pixels.
+        distance = 55 * (5 + .36 * args.observation_y) / (5 + .36 * 160) if args.region == "bottom" else 55
+        return CrossingTracker(args.lane_spacing, match_distance=distance)
+
+    tracker = new_tracker()
+    flick_tracker = new_tracker()
     bottom_spacing = (args.key_x[-1] - args.key_x[0]) / 6 * (5 + .36 * bottom_y) / (5 + .36 * args.judgment_y)
     bottom_tracker = CrossingTracker(bottom_spacing, match_distance=180)
     estimator = DelayEstimator(args.delay_ms, args.measure_tolerance_ms)
-    scheduler = TapScheduler(hwnd, args.send_keys, args.hold_ms, key_log=args.key_log,
+    output_backend = None
+    if args.output_backend == 'touch':
+        print('触摸模式：滑条保持同一触点；flick 直接滑动。延迟独立，需重新校准。')
+        if args.send_keys:
+            from touch_output import open_touch_output
+            focus = Keyboard(args.input_mode).focused
+            output_backend = resources.enter_context(open_touch_output(args, focus))
+    scheduler_class, scheduler_options = TapScheduler, {}
+    if args.output_backend == 'touch':
+        from touch_output import TouchScheduler
+        scheduler_class = TouchScheduler
+        scheduler_options = dict(flick_duration_ms=args.touch_flick_duration_ms,
+                                 flick_distance=args.touch_flick_distance)
+    scheduler = scheduler_class(hwnd, args.send_keys, args.hold_ms, key_log=args.key_log,
                              input_mode=args.input_mode, max_hold_ms=args.max_hold_ms,
                              flick_hold_ms=args.flick_hold_ms, timing_jitter=args.timing_jitter,
                              jitter_seed=args.jitter_seed, jitter_mean_ms=args.jitter_mean_ms,
-                             jitter_sigma_ms=args.jitter_sigma_ms)
+                             jitter_sigma_ms=args.jitter_sigma_ms, output_backend=output_backend, **scheduler_options)
+    resources.callback(scheduler.close)
     if scheduler.jitter:
         print(f"正态偏移 μ={args.jitter_mean_ms:+g}ms σ={args.jitter_sigma_ms:g}ms；"
               f"普通点击/独立 flick 理论 Perfect={scheduler.jitter.perfect_probability():.2%}（假设基础误差为零）")
     def new_green_controller():
         if args.green_slides:
-            return SlidingHoldController(args.lane_spacing, args.green_gap_ms, args.slide_overlap_ms,
-                                         tail_release_ms=args.green_tail_release_ms)
-        return GreenHoldController(args.lane_spacing, args.green_gap_ms,
-                                   tail_release_ms=args.green_tail_release_ms)
+            if args.output_backend == 'touch':
+                from touch_output import TouchSlideController
+                controller = TouchSlideController(args.lane_spacing, args.green_gap_ms,
+                                         tail_release_ms=args.green_tail_release_ms,
+                                         flick_guard_ms=args.flick_tail_guard_ms)
+            else:
+                controller = SlidingHoldController(args.lane_spacing, args.green_gap_ms, args.slide_overlap_ms,
+                                         tail_release_ms=args.green_tail_release_ms,
+                                         flick_guard_ms=args.flick_tail_guard_ms)
+        else:
+            controller = GreenHoldController(args.lane_spacing, args.green_gap_ms,
+                                   tail_release_ms=args.green_tail_release_ms,
+                                   flick_guard_ms=args.flick_tail_guard_ms)
+        controller.tracker = new_tracker()
+        return controller
 
     green_controller = new_green_controller()
     paused = False
@@ -304,13 +405,19 @@ def main():
     print("无预览模式：Ctrl+C 退出。" if args.no_preview else
           "预览已启动：1 特征图 / 2 标注图 / 3 过滤画面 / 4 原图；Q 或 Esc 退出。")
     print("这是屏幕区域捕捉：目标需保持可见且未被遮挡；最小化时暂停。")
+    print(f"识别模式 {args.region}；观察线 {args.observation_y:g}；轨道间距 {args.lane_spacing:.2f}px")
+    if args.region == "bottom":
+        print("底部模式使用独立 bottom-delay-ms；默认 0 未校准，请实验调整。")
     print(f"普通音符输出：{'真实按键（仅目标窗口聚焦时）' if args.send_keys else 'dry-run 日志'}；延迟 {delay_ms}ms")
-    if args.flicks:
+    if args.flicks and args.output_backend == 'keyboard':
         print(f"flick 输出：qweruio；延迟 {delay_ms + flick_offset_ms}ms；"
               f"宏按键持续 {args.flick_hold_ms}ms；热键同步调整 tap/flick 延迟")
-    if args.green_slides:
+    if args.green_slides and args.output_backend == 'keyboard':
         print(f"绿色换轨：相邻双键保留；旧轨出现新 tap 时让出；跨多轨重叠 {args.slide_overlap_ms}ms")
-    print(f"键盘输入方式：{args.input_mode}")
+    if args.output_backend == 'touch':
+        print(f"连续滑条：{args.green_slides}；flick：{args.flicks}，延迟 {delay_ms + flick_offset_ms:g}ms，"
+              f"滑动 {args.touch_flick_duration_ms:g}ms / 向上 {args.touch_flick_distance:g}px（900 高基准）")
+    print(f"输入后端：{args.output_backend}；日志 key=asdfjkl 在触摸模式代表轨道，不会发送键盘事件")
     if not args.no_preview:
         print("预览获得焦点后：[ / ] 调整延迟 -/+10ms，空格暂停/恢复。")
     try:
@@ -328,8 +435,8 @@ def main():
                         paused = not paused
                         scheduler.cancel()
                         green_controller = new_green_controller()
-                        tracker = CrossingTracker(args.lane_spacing)
-                        flick_tracker = CrossingTracker(args.lane_spacing)
+                        tracker = new_tracker()
+                        flick_tracker = new_tracker()
                         bottom_tracker = CrossingTracker(bottom_spacing, match_distance=180)
                         estimator = DelayEstimator(delay_ms, args.measure_tolerance_ms)
                         print(f"[control] {'PAUSED' if paused else 'RESUMED'} delay={delay_ms:.0f}ms", flush=True)
@@ -345,8 +452,8 @@ def main():
                 if region is None:
                     scheduler.cancel()
                     green_controller = new_green_controller()
-                    tracker = CrossingTracker(args.lane_spacing)
-                    flick_tracker = CrossingTracker(args.lane_spacing)
+                    tracker = new_tracker()
+                    flick_tracker = new_tracker()
                     bottom_tracker = CrossingTracker(bottom_spacing, match_distance=180)
                     estimator = DelayEstimator(delay_ms, args.measure_tolerance_ms)
                     if args.no_preview:
@@ -356,7 +463,7 @@ def main():
                     cv2.putText(frame, "Target minimized: restore to resume", (25, 220),
                                 cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 200, 255), 2)
                 else:
-                    if args.no_preview and args.region == "top":
+                    if args.no_preview and args.region in ("top", "bottom"):
                         processing, captured = capture_top_only(capture, region, args.process_width, args.top_band)
                     else:
                         original = np.asarray(capture.grab(region))[:, :, :3].copy()
@@ -366,7 +473,7 @@ def main():
                             ratio = args.process_width / original.shape[1]
                             processing = cv2.resize(original, None, fx=ratio, fy=ratio,
                                                     interpolation=cv2.INTER_AREA)
-                    if args.region == "top":
+                    if args.region in ("top", "bottom"):
                         result, artifacts = analyze_top_frame(processing, *args.top_band,
                                                               args.observation_y, args.judgment_y,
                                                               render=not args.no_preview, green_holds=args.green_holds,
@@ -404,7 +511,7 @@ def main():
                             for index, (action, token, lane, crossed) in enumerate(transitions):
                                 final = not any(a == 'hold-up' and t.split(':')[0] == token.split(':')[0]
                                                 for a, t, _, _ in transitions[index + 1:])
-                                bounds = hold_offset_bounds(action, token)
+                                bounds = hold_offset_bounds(action, token) if args.output_backend == 'keyboard' else ((0, 20) if action == 'hold-up' else None)
                                 scheduler.schedule_hold(action, token, lane, crossed + delay_ms / 1000,
                                                         final=final, offset_bounds=bounds)
                         events = tracker.update(result["blue_notes"] + yellow_taps, processing.shape[1],
@@ -430,8 +537,8 @@ def main():
                     else:
                         scheduler.cancel()
                         green_controller = new_green_controller()
-                        tracker = CrossingTracker(args.lane_spacing)
-                        flick_tracker = CrossingTracker(args.lane_spacing)
+                        tracker = new_tracker()
+                        flick_tracker = new_tracker()
                         bottom_tracker = CrossingTracker(bottom_spacing, match_distance=180)
                         estimator = DelayEstimator(delay_ms, args.measure_tolerance_ms)
                     if scheduler.error:
@@ -493,8 +600,8 @@ def main():
                         paused = not paused
                         scheduler.cancel()
                         green_controller = new_green_controller()
-                        tracker = CrossingTracker(args.lane_spacing)
-                        flick_tracker = CrossingTracker(args.lane_spacing)
+                        tracker = new_tracker()
+                        flick_tracker = new_tracker()
                         bottom_tracker = CrossingTracker(bottom_spacing, match_distance=180)
                     else:
                         updated = max(0, -flick_offset_ms if args.flicks else 0,
@@ -506,7 +613,6 @@ def main():
     finally:
         if hotkeys:
             hotkeys.close()
-        scheduler.close()
         if not args.no_preview:
             cv2.destroyAllWindows()
 

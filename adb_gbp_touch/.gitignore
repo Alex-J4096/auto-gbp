@@ -1,0 +1,5 @@
+__pycache__/
+*.py[cod]
+.venv/
+tools/
+# External binaries are intentionally not bundled.
