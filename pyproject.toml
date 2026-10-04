@@ -1,0 +1,13 @@
+[project]
+name = "auto-gbp-vision"
+version = "0.1.0"
+description = "First-stage note candidate extraction for a rhythm-game screenshot"
+requires-python = ">=3.11"
+dependencies = [
+    "numpy>=2.0,<3.0",
+    "opencv-python>=4.10,<5.0",
+    "mss>=10,<11",
+]
+
+[tool.uv]
+package = false
