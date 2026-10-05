@@ -8,11 +8,18 @@ import json
 import math
 import os
 from pathlib import Path
+import sys
 import tempfile
 import tomllib
 
-from .live_preview import build_parser, main as run_game, parse_args
-from .tap_output import NormalTimingOffset
+if __package__:
+    from .live_preview import build_parser, main as run_game, parse_args
+    from .tap_output import NormalTimingOffset
+else:
+    # Keep direct execution working: ``python auto_gbp/launcher.py``.
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    from auto_gbp.live_preview import build_parser, main as run_game, parse_args
+    from auto_gbp.tap_output import NormalTimingOffset
 
 
 DEFAULT_CONFIG = Path(__file__).resolve().parents[1] / 'config.toml'
@@ -185,7 +192,10 @@ def plain_menu(values, path, input_fn=input, output=print):
 
 
 def menu(values, path):
-    from .launcher_tui import SettingsApp
+    if __package__:
+        from .launcher_tui import SettingsApp
+    else:
+        from auto_gbp.launcher_tui import SettingsApp
     return SettingsApp(values, path).run()
 
 
