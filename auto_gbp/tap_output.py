@@ -12,7 +12,7 @@ import random
 from collections import deque
 from statistics import median
 from statistics import NormalDist
-from runtime_log import AsyncLog
+from .runtime_log import AsyncLog
 
 
 class CrossingTracker:

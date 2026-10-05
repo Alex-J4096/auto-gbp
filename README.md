@@ -6,14 +6,14 @@ ADB 多点触摸模块通过 Git submodule 引用独立仓库 [adb_gbp_touch](ht
 
 支持普通音符、黄色音符、绿色长押及粉色 flick。默认键盘模式的绿色换轨使用实验性双键交接，flick 使用模拟器预设手势宏；触摸模式则通过 ADB 控制通道注入多点触摸。
 
-主程序另提供实验性 `touch` 输入后端，支持普通点击、长押、连续滑条和向上 flick。接入前可先运行 [ADB 双指触摸测试](TOUCH_TEST.md)。
+主程序另提供实验性 `touch` 输入后端，支持普通点击、长押、连续滑条和向上 flick。接入前可先按 [ADB 双指触摸测试说明](adb_gbp_touch/README.md#独立测试)完成独立验证。
 
 ### 实验性触摸输入
 
 TUI 的“触摸输入”页可选择 `touch`，设置 ADB 路径、实例地址、scrcpy 3.3.3 服务端路径、Android 当前横屏尺寸及独立延迟。配置可正常保存到 TOML；切回 `keyboard` 后仍使用原来的键盘参数。已有配置不会自动改成触摸模式。
 
 ```powershell
-uv run python live_preview.py --title "MuMu安卓设备" --output-backend touch --adb-serial 127.0.0.1:5555 --touch-server tools/scrcpy-win64-v3.3.3/scrcpy-server --touch-size 1920 1080 --touch-delay-ms 350 --send-keys --key-log
+uv run python -m auto_gbp.live_preview --title "MuMu安卓设备" --output-backend touch --adb-serial 127.0.0.1:5555 --touch-server tools/scrcpy-win64-v3.3.3/scrcpy-server --touch-size 1920 1080 --touch-delay-ms 350 --send-keys --key-log
 ```
 
 地址、路径和尺寸请按已通过的独立测试填写。`350` 仅为延迟试验起点，不能保证与键盘模式相同；默认触摸延迟为 0，尚未校准。触摸延迟覆盖 top/bottom 的键盘延迟，F6～F9 调节当前运行值。关闭随机偏移后先在简单谱面校准。
@@ -67,16 +67,15 @@ uv sync --locked
 
 ```text
 auto-gbp/
-├── .gitmodules          # 独立库地址与目录
-├── adb_gbp_touch/       # 子模块：主仓库只记录固定提交
-├── touch_output.py      # 音游专用触点调度与滑条决策
-├── live_preview.py      # 捕捉、识别和主循环
-├── launcher*.py         # 配置和 TUI
+├── auto_gbp/            # 主项目 Python 包与命令行入口
+├── adb_gbp_touch/       # 独立 Git 子模块
+├── tests/               # 本地测试脚本，不提交到仓库
 ├── config.example.toml  # 可提交的配置示例
-└── test_*.py            # 主项目回归测试
+├── pyproject.toml       # 主项目依赖
+└── README.md
 ```
 
-个人 `config.toml`、外部二进制 `tools/`、截图 `test_pic/` 和产物 `output/` 保留在本地并忽略。
+个人 `config.toml`、外部二进制 `tools/`、截图 `test_pic/` 和产物 `output/` 保留在本地并忽略。主程序从仓库根目录使用 `python -m auto_gbp` 启动；各功能模块也可通过 `python -m auto_gbp.<模块名>` 调用。
 
 ### 开发与升级子模块
 
@@ -84,31 +83,27 @@ auto-gbp/
 
 仅在明确升级库版本时使用 `git submodule update --remote adb_gbp_touch`；测试通过后提交新指针。日常安装使用不带 `--remote` 的命令，才能保持版本可复现。主项目不使用 uv Git 依赖，也不自动跟随库的最新版本。
 
-### 回归测试
+### 本地测试
 
-```powershell
-uv run python -m unittest discover
-```
-
-测试使用模拟输入，不会控制模拟器。缺少未公开的 `test_pic/` 截图时，3 项截图测试会跳过，其余测试仍执行。
+测试脚本统一放在 `tests/`，并由 `.gitignore` 排除，不会随仓库上传。已有本地副本时，可在仓库根目录运行 `uv run python -m unittest discover -s tests`。
 
 ### 终端设置界面（推荐）
 
 安装依赖后运行：
 
 ```powershell
-uv run python launcher.py
+uv run python -m auto_gbp
 ```
 
 界面使用 Textual，从脚本所在目录的 `config.toml` 读取并填入设置，按“常用、长押、Flick、随机偏移、高级”分组。支持鼠标点击、滚轮、Tab / Shift+Tab 切换控件、空格切换开关和下拉选择。可选输入框清空表示恢复自动值，必填项为空会阻止启动。“显示预览”和“启用全局快捷键”均为正向开关。
 
 底部“运行”仅本次生效，“保存并运行”写入配置，“取消”退出；快捷键分别为 Ctrl+R、Ctrl+S、Ctrl+Q。真实输入开启时会弹出二次确认框，可按 Esc 返回修改。TUI 退出并恢复终端后才进入游戏主程序，不在表单打开时采集或发送按键。
 
-更新依赖请运行 `uv sync`。推荐在 Windows Terminal 中使用；若终端不支持交互控件，可用 `uv run python launcher.py --plain` 回退到编号菜单。原有 TOML 配置无需迁移。
+更新依赖请运行 `uv sync`。推荐在 Windows Terminal 中使用；若终端不支持交互控件，可用 `uv run python -m auto_gbp.launcher --plain` 回退到编号菜单。原有 TOML 配置无需迁移。
 
 配置文件使用 `[settings]` 表，键名为命令行参数名将连字符替换为下划线；未填写的项目使用程序默认值。可复制 `config.example.toml` 为 `config.toml`，或直接在 TUI 保存配置。示例默认关闭真实输入，参数只是调试起点。个人 `config.toml`、外部工具 `tools/` 和测试截图 `test_pic/` 不提交到仓库。保存会重写配置（不保留手写注释）；运行中的热键调整不会自动保存。
 
-可用 `uv run python launcher.py --config my_config.toml` 选择其他配置。文件不存在时使用程序默认值，选择保存才创建；格式错误或未知配置项会报错，不会静默忽略。
+可用 `uv run python -m auto_gbp.launcher --config my_config.toml` 选择其他配置。文件不存在时使用程序默认值，选择保存才创建；格式错误或未知配置项会报错，不会静默忽略。
 
 `flick-tail-guard-ms` 也已加入设置，默认 250ms，范围 0～2000ms。它控制尾 flick 候选的固定保护期，不是宏输入延迟；不随每帧续期。`flick-tail-release-ms` 则是宏触发后松开长押键的间隔，两者不同。
 
@@ -119,7 +114,7 @@ uv run python launcher.py
 先预览，不发送按键：
 
 ```powershell
-uv run python live_preview.py --title "MuMu安卓设备" --region bottom --preview
+uv run python -m auto_gbp.live_preview --title "MuMu安卓设备" --region bottom --preview
 ```
 
 底部默认识别 `y=480～700`，观察线 `y=600`（1600×900 基准）。无预览时只抓取该区域。轨道间距由 `key-x` 的平均间距及 `judgment-y` 按透视换算，不使用顶部的 43px；请先用预览刻度确认对齐。原有 `bottom-band` 是延迟测量区域，不是底部模式识别区域。
@@ -127,7 +122,7 @@ uv run python live_preview.py --title "MuMu安卓设备" --region bottom --previ
 `--bottom-delay-ms` 默认 **0ms，仅为未校准起点**；不沿用 `--delay-ms` 的顶部值。下面的 80ms 只是命令示例，请按实测修改：
 
 ```powershell
-uv run python live_preview.py --title "MuMu安卓设备" --region bottom --bottom-delay-ms 80 --send-keys --key-log
+uv run python -m auto_gbp.live_preview --title "MuMu安卓设备" --region bottom --bottom-delay-ms 80 --send-keys --key-log
 ```
 
 F6/F7、F8/F9 继续调整当前模式延迟，运行中调整不会自动保存。底部 flick 默认沿用底部延迟，另行校准使用 `--bottom-flick-delay-ms`；顶部 `--flick-delay-ms` 在底部模式下不生效。配置字段为 `region = "bottom"`、`bottom_delay_ms`、`bottom_flick_delay_ms`（可省略）、`lower_band = [480, 700]`、`lower_observation_y = 600`。
@@ -136,7 +131,7 @@ F6/F7、F8/F9 继续调整当前模式延迟，运行中调整不会自动保存
 
 ### 直接命令行运行
 
-原有 `live_preview.py` 用法保持不变，**不会读取启动器的配置文件**，默认值仍见下表。
+原有 `auto_gbp/live_preview.py` 用法保持不变，**不会读取启动器的配置文件**，默认值仍见下表。
 
 在项目目录安装依赖：
 
@@ -147,14 +142,14 @@ uv sync
 先打开预览检查画面与识别结果，不发送真实按键：
 
 ```powershell
-uv run python live_preview.py --preview
+uv run python -m auto_gbp.live_preview --preview
 ```
 
 确认后启动真实输出，可选开启按键日志：
 
 ```powershell
-uv run python live_preview.py --send-keys
-uv run python live_preview.py --send-keys --key-log
+uv run python -m auto_gbp.live_preview --send-keys
+uv run python -m auto_gbp.live_preview --send-keys --key-log
 ```
 
 默认配置无需逐项填写：
@@ -179,9 +174,9 @@ uv run python live_preview.py --send-keys --key-log
 ### 选择窗口与裁剪
 
 ```powershell
-uv run python live_preview.py --list
-uv run python live_preview.py --title "MuMu"
-uv run python live_preview.py --hwnd 0x123456 --preview
+uv run python -m auto_gbp.live_preview --list
+uv run python -m auto_gbp.live_preview --title "MuMu"
+uv run python -m auto_gbp.live_preview --hwnd 0x123456 --preview
 ```
 
 句柄是示例，请替换为窗口列表中的值。标题匹配多个窗口时，使用 `--hwnd` 精确选择。
@@ -189,7 +184,7 @@ uv run python live_preview.py --hwnd 0x123456 --preview
 预览中按 `4` 查看原始捕捉；如包含工具栏或黑边，用 `--crop X Y W H` 指定客户区内的游戏区域：
 
 ```powershell
-uv run python live_preview.py --preview --crop 0 0 1600 900
+uv run python -m auto_gbp.live_preview --preview --crop 0 0 1600 900
 ```
 
 裁剪采用 Windows 客户区物理像素。以上只是示例，不一定等于模拟器的 Android 分辨率。
@@ -198,16 +193,16 @@ uv run python live_preview.py --preview --crop 0 0 1600 900
 
 ```powershell
 # 指定延迟
-uv run python live_preview.py --send-keys --delay-ms 360
+uv run python -m auto_gbp.live_preview --send-keys --delay-ms 360
 
 # 仅普通音符（含黄色普通音符）
-uv run python live_preview.py --send-keys --no-green-holds --no-flicks
+uv run python -m auto_gbp.live_preview --send-keys --no-green-holds --no-flicks
 
 # 保留同轨长押，关闭实验性换轨
-uv run python live_preview.py --send-keys --no-green-slides
+uv run python -m auto_gbp.live_preview --send-keys --no-green-slides
 
 # 单独设置 flick 延迟
-uv run python live_preview.py --send-keys --flick-delay-ms 330
+uv run python -m auto_gbp.live_preview --send-keys --flick-delay-ms 330
 ```
 
 `--no-green-holds` 同时禁用换轨。关闭长押后，识别为长押连接节点的黄色音符不会退化为普通点击。
@@ -215,8 +210,8 @@ uv run python live_preview.py --send-keys --flick-delay-ms 330
 ### 单键测试
 
 ```powershell
-uv run python live_preview.py --send-keys --test-key f
-uv run python live_preview.py --send-keys --test-key r
+uv run python -m auto_gbp.live_preview --send-keys --test-key f
+uv run python -m auto_gbp.live_preview --send-keys --test-key r
 ```
 
 程序等待三秒，期间切回 MuMu；目标窗口未聚焦时取消测试。`f` 测试中间轨普通键，`r` 测试对应 flick 宏键。测试不识别画面，保持时长由 `--hold-ms` 控制。
@@ -283,7 +278,7 @@ uv run python live_preview.py --send-keys --test-key r
 ## 可选：随机时间偏移
 
 ```powershell
-uv run python live_preview.py --send-keys --timing-jitter --jitter-mean-ms 5 --jitter-sigma-ms 21.5
+uv run python -m auto_gbp.live_preview --send-keys --timing-jitter --jitter-mean-ms 5 --jitter-sigma-ms 21.5
 ```
 
 默认关闭。开启后，从截断于 [−83,+100]ms 的正态分布采样并叠加到基础延迟。`--jitter-mean-ms` 设置均值 μ，`--jitter-sigma-ms` 设置标准差 σ；σ=0 时为固定偏移。`--jitter-seed 42` 可复现相同事件调用顺序下的采样。
@@ -337,8 +332,8 @@ uv run python live_preview.py --send-keys --timing-jitter --jitter-mean-ms 5 --j
 ## 离线截图分析
 
 ```powershell
-uv run python detect_notes.py path/to/screenshots --output output
-uv run python detect_notes.py path/to/green.jpg --output output/green
+uv run python -m auto_gbp.detect_notes path/to/screenshots --output output
+uv run python -m auto_gbp.detect_notes path/to/green.jpg --output output/green
 ```
 
 截图需自行准备，将上述路径替换为本地截图目录或文件。目录输入按文件名分别保存结果，主要输出：
@@ -357,16 +352,16 @@ uv run python detect_notes.py path/to/green.jpg --output output/green
 
 | 文件 | 职责 |
 | --- | --- |
-| `live_preview.py` | 窗口捕捉、运行参数、预览与热键 |
-| `detect_notes.py` | OpenCV 候选筛选、轨迹特征与离线分析 |
-| `tap_output.py` | 跨帧跟踪、长押状态、输入调度与时间偏移 |
-| `runtime_log.py` | 有界异步日志 |
+| `auto_gbp/live_preview.py` | 窗口捕捉、运行参数、预览与热键 |
+| `auto_gbp/detect_notes.py` | OpenCV 候选筛选、轨迹特征与离线分析 |
+| `auto_gbp/tap_output.py` | 跨帧跟踪、长押状态、输入调度与时间偏移 |
+| `auto_gbp/runtime_log.py` | 有界异步日志 |
 
-测试代码（`test_*.py`）、测试截图（`test_pic/`）、分析输出（`output/`）、`cmd.txt`、虚拟环境、缓存和日志由 `.gitignore` 排除，仅留在本地，不随仓库分发。
+测试代码（`tests/`、`test_*.py`、`*_test.py`）、测试截图（`test_pic/`）、分析输出（`output/`）、`cmd.txt`、虚拟环境、缓存和日志由 `.gitignore` 排除，仅留在本地，不随仓库分发。
 
 ```powershell
-uv run python live_preview.py --help
-uv run python detect_notes.py --help
+uv run python -m auto_gbp.live_preview --help
+uv run python -m auto_gbp.detect_notes --help
 ```
 
 ## 已知限制

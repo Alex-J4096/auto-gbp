@@ -4,7 +4,7 @@ from pathlib import Path
 import heapq
 import time
 
-from tap_output import TapScheduler, FlickTailMixin, CrossingTracker
+from .tap_output import TapScheduler, FlickTailMixin, CrossingTracker
 
 from adb_gbp_touch import Adb, Touch, connection
 

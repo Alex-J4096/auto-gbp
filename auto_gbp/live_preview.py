@@ -13,8 +13,8 @@ import cv2
 import mss
 import numpy as np
 
-from detect_notes import analyze_frame, analyze_top_frame, detect_bottom_blue, draw_bottom_keys
-from tap_output import CrossingTracker, TapScheduler, DelayEstimator, Keyboard, GreenHoldController, SlidingHoldController
+from .detect_notes import analyze_frame, analyze_top_frame, detect_bottom_blue, draw_bottom_keys
+from .tap_output import CrossingTracker, TapScheduler, DelayEstimator, Keyboard, GreenHoldController, SlidingHoldController
 
 
 class GlobalHotkeys:
@@ -360,12 +360,12 @@ def run_main(argv, resources):
     if args.output_backend == 'touch':
         print('触摸模式：滑条保持同一触点；flick 直接滑动。延迟独立，需重新校准。')
         if args.send_keys:
-            from touch_output import open_touch_output
+            from .touch_output import open_touch_output
             focus = Keyboard(args.input_mode).focused
             output_backend = resources.enter_context(open_touch_output(args, focus))
     scheduler_class, scheduler_options = TapScheduler, {}
     if args.output_backend == 'touch':
-        from touch_output import TouchScheduler
+        from .touch_output import TouchScheduler
         scheduler_class = TouchScheduler
         scheduler_options = dict(flick_duration_ms=args.touch_flick_duration_ms,
                                  flick_distance=args.touch_flick_distance)
@@ -381,7 +381,7 @@ def run_main(argv, resources):
     def new_green_controller():
         if args.green_slides:
             if args.output_backend == 'touch':
-                from touch_output import TouchSlideController
+                from .touch_output import TouchSlideController
                 controller = TouchSlideController(args.lane_spacing, args.green_gap_ms,
                                          tail_release_ms=args.green_tail_release_ms,
                                          flick_guard_ms=args.flick_tail_guard_ms)

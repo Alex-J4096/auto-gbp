@@ -6,7 +6,7 @@ from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.screen import ModalScreen
 from textual.widgets import Button, Footer, Header, Input, Label, Select, Static, Switch, TabbedContent, TabPane
 
-from launcher import edit_value, fields, save_config, validate
+from .launcher import edit_value, fields, save_config, validate
 
 
 GROUPS = [

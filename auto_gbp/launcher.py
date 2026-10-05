@@ -11,11 +11,11 @@ from pathlib import Path
 import tempfile
 import tomllib
 
-from live_preview import build_parser, main as run_game, parse_args
-from tap_output import NormalTimingOffset
+from .live_preview import build_parser, main as run_game, parse_args
+from .tap_output import NormalTimingOffset
 
 
-DEFAULT_CONFIG = Path(__file__).with_name('config.toml')
+DEFAULT_CONFIG = Path(__file__).resolve().parents[1] / 'config.toml'
 EXCLUDED = {'help', 'list', 'test_key'}
 
 
@@ -185,7 +185,7 @@ def plain_menu(values, path, input_fn=input, output=print):
 
 
 def menu(values, path):
-    from launcher_tui import SettingsApp
+    from .launcher_tui import SettingsApp
     return SettingsApp(values, path).run()
 
 

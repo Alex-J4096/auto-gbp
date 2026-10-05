@@ -9,6 +9,11 @@ __pycache__/
 .coverage
 htmlcov/
 
+# Local test scripts are kept out of repository history
+/tests/
+test_*.py
+*_test.py
+
 # Generated analysis output and local debugging files
 /output/
 *.log

@@ -1,4 +1,4 @@
-# Copy to config.toml, or start launcher.py and save your settings.
+# Copy to config.toml, or start `uv run python -m auto_gbp` and save your settings.
 # Omitted settings use CLI defaults. Real input is disabled for safety.
 [settings]
 title = "MuMu"
