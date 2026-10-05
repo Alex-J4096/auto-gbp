@@ -1,6 +1,6 @@
 # Auto GBP
 
-需要单独分享 ADB 多点触摸输入时，直接复制 [adb_gbp_touch](adb_gbp_touch/README.md) 文件夹；其中包含独立说明、测试和多指时间轴宏接口，无需本项目依赖。
+ADB 多点触摸模块通过 Git submodule 引用独立仓库 [adb_gbp_touch](https://github.com/Alex-J4096/adb_gbp_touch)。主项目固定其提交版本，不再单独维护一份库源码；库的独立用法见 [模块说明](adb_gbp_touch/README.md)。
 
 基于 Python、OpenCV 和 Windows 窗口捕捉的音游自动输入原型，面向 MuMu 模拟器中的七轨游戏画面。支持顶部或底部区域识别，按人工校准的延迟调度键盘或多点触摸输入，并提供实时预览和离线截图分析。
 
@@ -45,6 +45,52 @@ uv run python live_preview.py --title "MuMu安卓设备" --output-backend touch 
 键盘模式 flick 的方向、距离和速度由 MuMu 手势宏决定。Android 的 240 DPI 不影响截图像素坐标；Windows 客户区可能包含工具栏和黑边，需要单独确认裁剪。
 
 ## 快速开始
+
+### 获取项目和依赖
+
+```powershell
+git clone --recurse-submodules https://github.com/Alex-J4096/auto-gbp.git
+cd auto-gbp
+uv sync --locked
+```
+
+已有仓库拉取更新后，运行：
+
+```powershell
+git submodule update --init --recursive
+uv sync --locked
+```
+
+`uv sync` 不会下载 Git 子模块；GitHub 的主仓库 ZIP 通常不含子模块内容，推荐使用上述克隆命令。Python 导入仍是 `from adb_gbp_touch import ...`，无需另外 pip 安装。
+
+仓库分工：
+
+```text
+auto-gbp/
+├── .gitmodules          # 独立库地址与目录
+├── adb_gbp_touch/       # 子模块：主仓库只记录固定提交
+├── touch_output.py      # 音游专用触点调度与滑条决策
+├── live_preview.py      # 捕捉、识别和主循环
+├── launcher*.py         # 配置和 TUI
+├── config.example.toml  # 可提交的配置示例
+└── test_*.py            # 主项目回归测试
+```
+
+个人 `config.toml`、外部二进制 `tools/`、截图 `test_pic/` 和产物 `output/` 保留在本地并忽略。
+
+### 开发与升级子模块
+
+修改库代码时，在 `adb_gbp_touch` 仓库单独提交并推送；然后在主仓库执行 `git add adb_gbp_touch` 并提交版本指针。必须先确保库提交已推送，否则其他人无法获取对应版本。
+
+仅在明确升级库版本时使用 `git submodule update --remote adb_gbp_touch`；测试通过后提交新指针。日常安装使用不带 `--remote` 的命令，才能保持版本可复现。主项目不使用 uv Git 依赖，也不自动跟随库的最新版本。
+
+### 回归测试
+
+```powershell
+uv run python -m unittest discover
+```
+
+测试使用模拟输入，不会控制模拟器。缺少未公开的 `test_pic/` 截图时，3 项截图测试会跳过，其余测试仍执行。
 
 ### 终端设置界面（推荐）
 
