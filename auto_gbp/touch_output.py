@@ -138,15 +138,19 @@ class TouchScheduler(TapScheduler):
     def schedule_flick(self, note_id, lane, deadline):
         with self.condition:
             token = f'F{note_id}'
-            self.push(self.offset_deadline(deadline, token), 'flick', lane, token)
+            self.push(self.offset_deadline(deadline, token, offset=0), 'flick', lane, token)
 
     def schedule_flick_tail(self, note_id, lane, deadline, keys, release_ms=30, offset_bounds=None):
         if len(keys) != 1:
             raise ValueError('触摸长押尾必须对应唯一触点')
         token = next(iter(keys.values()))
         with self.condition:
-            due = self.offset_deadline(deadline, token, self.hold_offsets.pop(token, 0), offset_bounds)
+            self.hold_offsets.pop(token, None)
+            due = self.offset_deadline(deadline, token, 0, offset_bounds)
             self.push(due, 'tail-flick', lane, token)
+            if self.key_log:
+                self.log(f'[tail-plan] note=F{note_id} hold={token} lane={lane} '
+                         f'due={due:.6f} offset={(due-deadline)*1000:+.1f}ms')
 
     def cancel(self):
         with self.condition:

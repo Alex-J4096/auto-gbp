@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import json
+from functools import lru_cache
 from pathlib import Path
 
 import cv2
@@ -76,14 +77,15 @@ def detect(image: np.ndarray, hue_low: int, hue_high: int,
 
 def extract_markers(raw: np.ndarray, min_note_y: int = 38,
                     frame_shape: tuple | None = None,
-                    offset: tuple[int, int] = (0, 0)) -> tuple[np.ndarray, list[dict]]:
+                    offset: tuple[int, int] = (0, 0), *,
+                    build_mask: bool = True) -> tuple[np.ndarray | None, list[dict]]:
     """Horizontal note faces; perspective constrains their expected width."""
     height, width = (frame_shape or raw.shape)[:2]
     sx, sy = width / REFERENCE_WIDTH, height / REFERENCE_HEIGHT
     horizontal = cv2.getStructuringElement(cv2.MORPH_RECT, (max(3, round(7 * sx)), 1))
     filtered = cv2.morphologyEx(raw, cv2.MORPH_OPEN, horizontal)
     count, labels, stats, _ = cv2.connectedComponentsWithStats(filtered, 8)
-    kept = np.zeros_like(raw)
+    kept = np.zeros_like(raw) if build_mask else None
     markers = []
     for label in range(1, count):
         x, y, w, h, area = map(int, stats[label])
@@ -94,8 +96,9 @@ def extract_markers(raw: np.ndarray, min_note_y: int = 38,
         if not 2 <= hr <= 60 or wr / max(hr, 1) < 2.3 or area < 10 * sx * sy:
             continue
         # Restrict label comparison to its bounding box, not the full frame.
-        region = kept[y:y + h, x:x + w]
-        region[labels[y:y + h, x:x + w] == label] = 255
+        if kept is not None:
+            region = kept[y:y + h, x:x + w]
+            region[labels[y:y + h, x:x + w] == label] = 255
         markers.append({"x": x + offset[0], "y": y + offset[1], "width": w, "height": h,
                         "center_x": round(x + offset[0] + w / 2, 1),
                         "center_y": round(y + offset[1] + h / 2, 1), "mask_area": area})
@@ -148,6 +151,24 @@ def classify_green_roles(markers, green, offset=(0, 0), valid=None):
                               'head' if above else 'tail' if below else 'unknown')
 
 
+@lru_cache(maxsize=16)
+def _top_geometry(height: int, width: int, top: float, bottom: float):
+    """Bounded, read-only geometry cache shared by frames of the same size."""
+    sx, sy = width / 1600, height / 900
+    y1, y2 = round(top * sy), min(height, round(bottom * sy) + 1)
+    half = 40 + 1.03 * bottom
+    x1, x2 = max(0, round((800 - half) * sx)), min(width, round((800 + half) * sx) + 1)
+    if x2 <= x1 or y2 <= y1:
+        raise ValueError("图像过小，顶部区域为空")
+    field = np.zeros((y2 - y1, x2 - x1), np.uint8)
+    polygon = np.array([[round((800 - 40 - 1.03 * top) * sx) - x1, 0],
+                        [round((800 + 40 + 1.03 * top) * sx) - x1, 0],
+                        [x2 - x1 - 1, y2 - y1 - 1], [0, y2 - y1 - 1]], np.int32)
+    cv2.fillConvexPoly(field, polygon, 255)
+    field.flags.writeable = False
+    return x1, y1, x2, y2, field
+
+
 def analyze_top_frame(image: np.ndarray, top: float = 34, bottom: float = 200,
                       observation_y: float = 160, judgment_y: float = 738.52,
                       render: bool = True, green_holds: bool = False,
@@ -161,18 +182,11 @@ def analyze_top_frame(image: np.ndarray, top: float = 34, bottom: float = 200,
         raise ValueError("顶部范围/观察线/底部判定线参数不合法")
     height, width = image.shape[:2]
     sx, sy = width / 1600, height / 900
-    y1, y2 = round(top * sy), min(height, round(bottom * sy) + 1)
-    half = 40 + 1.03 * bottom
-    x1, x2 = max(0, round((800 - half) * sx)), min(width, round((800 + half) * sx) + 1)
+    x1, y1, x2, y2, field = _top_geometry(height, width, top, bottom)
     roi = image[y1:y2, x1:x2]
     if roi.size == 0:
         raise ValueError("图像过小，顶部区域为空")
     hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
-    field = np.zeros(roi.shape[:2], np.uint8)
-    polygon = np.array([[round((800 - 40 - 1.03 * top) * sx) - x1, 0],
-                        [round((800 + 40 + 1.03 * top) * sx) - x1, 0],
-                        [x2 - x1 - 1, y2 - y1 - 1], [0, y2 - y1 - 1]], np.int32)
-    cv2.fillConvexPoly(field, polygon, 255)
     if render:
         overlay, features, filtered = image.copy(), np.zeros_like(image), np.zeros_like(image)
     groups = {}
@@ -188,7 +202,7 @@ def analyze_top_frame(image: np.ndarray, top: float = 34, bottom: float = 200,
             groups[name] = []
             continue
         raw = cv2.bitwise_and(cv2.inRange(hsv, low, high), field)
-        kept, markers = extract_markers(raw, top, image.shape, (x1, y1))
+        kept, markers = extract_markers(raw, top, image.shape, (x1, y1), build_mask=render)
         if render:
             filtered[y1:y2, x1:x2][kept > 0] = roi[kept > 0]
         for index, note in enumerate(markers, 1):
@@ -247,7 +261,7 @@ def detect_bottom_blue(image: np.ndarray, top: float = 650, bottom: float = 775)
         return []
     hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
     raw = cv2.inRange(hsv, (85, 90, 95), (110, 255, 255))
-    _, markers = extract_markers(raw, top, image.shape, (0, y1))
+    _, markers = extract_markers(raw, top, image.shape, (0, y1), build_mask=False)
     return markers
 
 

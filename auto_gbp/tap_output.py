@@ -118,7 +118,11 @@ class FlickTailMixin:
         tails, ordinary = [], []
         associations = {}
         crossing_ids = {event[0] for event in events}
-        for track in tracker.tracks:
+        # Only the nearest pending tail may own each hold. A later connected
+        # flick in the same lane belongs to a later note, not a competing tail
+        # of the current hold. Prefer crossing events over future observations.
+        claimed = set()
+        for track in sorted(tracker.tracks, key=lambda t: (t['id'] in crossing_ids, t['y']), reverse=True):
             # A crossed/stale tail must not keep postponing another hold's end.
             if (not track.get('green_below') or now - track['time'] > .12
                     or (track['fired'] and track['id'] not in crossing_ids)):
@@ -128,6 +132,9 @@ class FlickTailMixin:
                        if (abs(state['position'] - lane) <= .8 if 'position' in state else identity == lane)]
             if len(matches) == 1:
                 identity, state = matches[0]
+                if identity in claimed:
+                    continue
+                claimed.add(identity)
                 associations[track['id']] = identity
                 if state.get('flick_pending_id') != track['id']:
                     state['flick_pending_id'] = track['id']
@@ -432,17 +439,17 @@ class TapScheduler:
 
     def schedule_flick(self, note_id, lane, deadline):
         with self.condition:
-            deadline = self.offset_deadline(deadline, f'F{note_id}')
+            deadline = self.offset_deadline(deadline, f'F{note_id}', offset=0)
             self.sequence += 1
             heapq.heappush(self.queue, (deadline, self.sequence, "flick-down", "qweruio"[lane], f"F{note_id}"))
             self.condition.notify()
 
     def schedule_flick_tail(self, note_id, lane, deadline, keys, release_ms=30, offset_bounds=None):
-        """Atomically queue a macro and all hold releases with one timing offset."""
+        """Queue tail and releases without jitter; retain the fixed late margin."""
         with self.condition:
             identity = next(iter(keys.values())).split(':')[0]
-            offset = self.hold_offsets.pop(identity, 0)
-            due = self.offset_deadline(deadline, f'FT{note_id}', offset, offset_bounds)
+            self.hold_offsets.pop(identity, None)
+            due = self.offset_deadline(deadline, f'FT{note_id}', 0, offset_bounds)
             self.sequence += 1
             heapq.heappush(self.queue, (due, self.sequence, 'flick-down', 'qweruio'[lane], f'FT{note_id}'))
             for held_lane, token in keys.items():
